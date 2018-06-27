@@ -1,0 +1,676 @@
+---
+title: "Titanic: Machine Learning from Disaster"
+author: "Adrian R Angkawijaya"
+date: "6/22/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### **Introduction**
+This is the Data Science Competition Project *Titanic: Machine Learning from Disaster* hosted by Kaggle. The goal of this project is to predict the survivability of Titanic Passengers. The datasets are provided by Kaggle and contains both train and test datasets. The table below shows the descriptions of the variables in the datasets.
+
+```{r, echo = FALSE}
+library(knitr)
+table <- data.frame(Variable = c("Survived", "Name", "Pclass", "Sex", "Age", "SibSp", "Parch", "Ticket", "Fare", "Cabin", "Embarked"), Description = c("Indicates whether the Passenger Survived or Died (1 = Survived, 0 = Died)", "Name of the Passenger", "Ticket Class (1 = 1st class, 2 = 2nd class, 3 = 3rd class)", "Gender of the Passenger (Male/Female)", "Age of the Passenger", "Number of Siblings/Spouse aboard with the Passenger", "Number of Parents/Children aboard with the Passenger", "Passenger's Ticket Number", "Passenger's Ticket Price", "Passenger's Cabin Number", "Port of Embarkation (C = Cherbourg, Q = Queenstown, S = Southampton)"))
+
+kable(table) 
+```
+
+This notebook is divided into a number of activities including the preparation of data, data cleaning, data transformation, Exploratory Data Analysis and finally the Prediction. We first check if there are any missing values and correct them if necessary. After the data has been cleaned and structured, we then do multiple visualizations and analysis to understand more about the data. We also select some importance features for building the prediction model that can be used to predict survival rate. This project only use the Random Forest as the algorithm for the model.
+
+### **Data Preparation**
+
+We first load the given train and test datasets. We also set all the string variables as non factors and identify the NA values.
+```{r}
+titanicTrain <- read.csv("/Users/adrianromano/R/titanic/train.csv", stringsAsFactors = FALSE, na.strings = c("NA", ""))
+titanicTest <- read.csv("/Users/adrianromano/R/titanic/test.csv", stringsAsFactors = FALSE, na.strings = c("NA", ""))
+```
+
+**Note:** We decide to combine both the datasets into one so that we only clean one dataset instead of inputting the code twice for two datasets. 
+
+Before we merge the dataset, we have to make sure both the datasets have the same exact variables. We check them as follows:
+```{r}
+names(titanicTrain)
+names(titanicTest)
+```
+The test dataset is missing the **Survived** variable so we create the variable ourselves consisting of NA values.
+```{r}
+titanicTest$Survived <- "NA"
+```
+Now the two datasets have the same exact variables. We have to do one last thing before we combine the datasets, that is to label which datasets is the train and the test set. This is needed so that we can later separate them easily after the cleaning process is done. We do so by adding another variable **Set** to both datasets containing characters of either train or test.
+```{r}
+titanicTrain$Set <- "Train"
+titanicTest$Set <- "Test"
+```
+
+Now that it is done, we can now merge the datasets into one. 
+```{r}
+titanicFull <- rbind(titanicTrain, titanicTest)
+```
+Let's see the structure and dimension of the combined dataset.
+```{r}
+str(titanicFull)
+dim(titanicFull)
+```
+The data contains 1309 observations and 13 Variables.
+
+We are done preparing the data! Now let's move on to the cleaning process.
+
+### **Data Cleaning**
+
+Now is the part where we clean and transform the data for easier analysis and prediction. We first check if there are any missing values present in the dataset:
+```{r}
+colSums(is.na(titanicFull))
+```
+Looks like the variables **Fare** and **Embarked** have some missing values. The **Age** and **Cabin** variables however have a lot of missing values! (263 and 1014 respectively).
+
+The **Embarked** variable contains two missing values. Since the missing values are just a few and not that concerning, we just decide to replace them with the value of the mode (highest amount of count). We first check the **Embarked** distribution as shown:
+```{r}
+table(titanicFull$Embarked)
+```
+Looks like the highest amount of count comes from port "S" with 914 total passengers. So we will use this as the mode value and replace the missing Embarked value as "S".
+```{r}
+titanicFull[is.na(titanicFull$Embarked), "Embarked"] <- "S"
+```
+
+The **Fare** variable contains only one missing value. We can easily replace it with the median of the fares as follows:
+```{r}
+fareMedian <- median(titanicFull$Fare, na.rm = TRUE)
+titanicFull[is.na(titanicFull$Fare), "Fare"] <- fareMedian
+```
+
+**Note:** One thing that we can also do is to transform the **Fare** variable to categorical variables to see if it would increase prediction accuracy later on. 
+
+We divide **Fare** to three category (Low Fares, Medium Fares, High Fares) as shown:
+```{r}
+titanicFull$FareGroup <- cut(titanicFull$Fare, breaks = 3, labels = c("Low", "Medium", "High"))
+table(titanicFull$FareGroup)
+```
+
+That is all we needed to do for **Fare**. Next let's look at the **Cabin** variable:
+```{r}
+head(titanicFull$Cabin)
+```
+**Note:** Since the missing values in **Cabin** variable is really high and we also have no way of knowing the cabin informations that are missing, we decide to just ignore and drop this feature completely. 
+
+For **Age** variable, we can also do the same as we did on **Fare** by replacing the missing values with the median. However, the missing values for **Age** are a lot higher so a simple median computation alone may not provide an accurate prediction. We decide to use another approach by using a regression model to predict the values. We will do this later on in the section and explore the other variables first.
+
+Those are the only variables that need to be cleaned. Now we move on to see if there are any variables that can be transformed to help with easier analysis and prediction.
+
+Let's now look at the **Name** Variable:
+```{r}
+head(titanicFull$Name)
+length(unique(titanicFull$Name))
+```
+There are so many different names (1307 total), it will be hard to visualize it for the report.
+
+**Note:** I notice that every name has a title such as "Mr", "Mrs", "Miss"" etc. So we decide to extract the titles to another variable **Title** to tone down the distribution.
+```{r}
+titanicFull$Title <- gsub("^.*, (.*?)\\..*$", "\\1", titanicFull$Name)
+table(titanicFull$Sex, titanicFull$Title)
+```
+Looking from the result above, it seems that "Mr", "Mrs", "Master" and "Miss" have lot of counts so we decide to keep those. "Mlle" and "Ms" are the same as "Miss" so we include them together with "Miss". "Mme" is the same as "Mrs" so we also include them together. All the other titles only have very few counts, so we combine them all as one into a new name "Other" containing all those other titles. 
+```{r}
+titanicFull$Title[titanicFull$Title %in% c("Mlle", "Ms")] <- "Miss" 
+titanicFull$Title[titanicFull$Title == "Mme"] <- "Mrs"
+titanicFull$Title[titanicFull$Title %in%  c("Capt", "Col", "Don", "Dona", "Dr", "Jonkheer", "Lady", "Major", "Rev", "Sir", "the Countess")] <- "Other"
+table(titanicFull$Sex, titanicFull$Title)
+```
+Now this looks a lot better! I can see this feature as a part of the visualization and prediction later.
+
+Next we look at both **SibSp** and **Parch** variables.
+
+These two variables contain the number of family members on board with the passengers, it may be possible to combine them into one variable called **FamilySize** for simplicity. 
+```{r}
+titanicFull$FamilySize <- titanicFull$SibSp + titanicFull$Parch + 1
+```
+**Note:** The passenger is counted towards the size of the family thats why we added 1 representing the passenger themselves. 
+
+One thing we can also do is to divide the Family Size distribution into 3 groups (Alone, Small Family Size, Large Family Size). 
+```{r}
+titanicFull$FamilyGroup[titanicFull$FamilySize == 1] <- "Alone"
+titanicFull$FamilyGroup[titanicFull$FamilySize > 1 & titanicFull$FamilySize < 5] <- "Small"
+titanicFull$FamilyGroup[titanicFull$FamilySize > 4] <- "Large"
+```
+
+Next, let's now look at the **Ticket** variable
+```{r}
+head(titanicFull$Ticket)
+length(unique(titanicFull$Ticket))
+```
+**Note:** It looks like this variable is not relevant to predict Survival and there are too many unique values so we decide to just ignore and drop this feature completely.
+
+Now we can finally look at **Age** variable. Before we do the regression model, we need to see if the data has any outliers by looking at the boxplot distribution.
+```{r}
+boxplot(titanicFull$Age, col = "bisque", main = "Boxplot of Age")
+```
+
+**Note:** We can see that there are numerous outliers present, they need to be removed since these outliers can make the prediction less accurate.
+
+Here we filter the outliers out by taking only the values until the maximum value:
+```{r}
+outlierFilter <- titanicFull$Age < boxplot.stats(titanicFull$Age)$stats[5]
+```
+
+Now we can make the regression model using the filtered outlier data. The predicted results are used to replace the missing values of **Age**.
+```{r}
+ageModel <- lm(Age ~ Pclass + Sex + Fare + FamilyGroup + Embarked + Title, data = titanicFull[outlierFilter,])
+newdata <- titanicFull[is.na(titanicFull$Age), c("Pclass", "Sex", "Fare", "FamilyGroup", "Embarked", "Title")]
+titanicFull[is.na(titanicFull$Age), "Age"] <- predict(ageModel, newdata)
+```
+
+One thing that we can also do is to divide the **Age** variable into groups of either Child or Adult. We make Child as the passengers with age lower than 18 years old and Adult as passengers with age 18 or higher. We store them in a new variable named **AgeGroup**.
+```{r}
+titanicFull$AgeGroup[titanicFull$Age < 18] <- "Child"
+titanicFull$AgeGroup[titanicFull$Age >= 18] <- "Adult"
+```
+
+I think that is done for this section! Lets do one final check of the columns to make sure they have no more missing values.
+```{r}
+colSums(is.na(titanicFull))
+```
+All cleaned except for **Cabin** variable that we decided earlier to ignore and drop so we are good!
+
+Before we split the dataset back to the train and test datasets, we convert some variables into factors so that they can be visualized later in the next section.
+
+**Note:** The **Survived** variable will be converted later in the Train set after we split the dataset since the combined dataset still has NA values present from the Test set that we created before.
+```{r}
+titanicFull$Pclass <- as.factor(titanicFull$Pclass)
+titanicFull$Sex <- as.factor(titanicFull$Sex)
+titanicFull$AgeGroup <- as.factor(titanicFull$AgeGroup)
+titanicFull$FareGroup <- as.factor(titanicFull$FareGroup)
+titanicFull$Embarked <- as.factor(titanicFull$Embarked)
+titanicFull$Title <- as.factor(titanicFull$Title)
+titanicFull$FamilySize <- as.factor(titanicFull$FamilySize)
+titanicFull$FamilyGroup <- as.factor(titanicFull$FamilyGroup)
+```
+
+Now we split them back to the original train and test datasets along with setting the **Survived** variable to factors.
+```{r}
+titanicTrain <- titanicFull[titanicFull$Set == "Train", ]
+titanicTest <- titanicFull[titanicFull$Set == "Test", ]
+titanicTrain$Survived <- as.factor(titanicTrain$Survived)
+```
+
+Let's do a final check of the train set structure before moving on to the next section.
+```{r}
+str(titanicTrain)
+```
+
+### **Exploratory Data Analysis**
+
+Now that the data is already cleaned and structured, we can move on to the analysis and visualizations. 
+
+As usual, we first load the necessary packages:
+```{r, message = FALSE}
+library(dplyr)
+library(pander)
+library(ggplot2)
+```
+
+We then see the distribution of Survival:
+```{r}
+ggplot(titanicTrain, aes(x = Survived)) +
+    geom_bar(stat = "count", aes(fill = Survived), col = "black", alpha = 0.8) +
+    labs(x = "", y = "", title = "Number of Survivors") +
+    geom_label(stat = "count", aes(label = ..count..)) +
+    theme_classic()
+```
+
+**Comments:** We can see that there are more passengers that died than survived (549 people died and only 342 people survived).
+
+Which are the passengers that survived? Let's find out by exploring more of the data.
+
+### Age vs Survived
+```{r, message = FALSE}
+ggplot(titanicTrain, aes(Age)) +
+    geom_histogram() +
+    labs(x = "Age", y = "Number of Passengers", title = "Number of Passengers based on Age") +
+    theme_bw()
+```
+
+**Comment:** There seem to be a lot of passengers of around age 30 on board shown by the highest peak in the histogram. 
+
+Lets see the Survival comparison for age:
+```{r}
+ggplot(titanicTrain) +
+  geom_freqpoly(mapping = aes(x = Age, color = Survived), binwidth = 1) +
+  labs(x = "Age", y = "Number of Passengers", title = "Survival Comparison by Age") +
+  theme_bw()
+```
+
+**Comment:** It seems that a lot of the middle aged passengers died while the younger age passengers of around age 1 or 2 are more likely to survive.
+
+We can probably see it more clearly by looking at the survival comparison between Child and Adults using the **AgeGroup** feature we created from previous section.
+
+**Note**: On previous section we assigned Child as passengers of age below 18 and Adults as passengers of age 18 and above.
+
+Let's see the count comparison between Child and Adult on board.
+```{r}
+agegroupCount <- titanicTrain %>%
+    group_by(AgeGroup) %>%
+    count(AgeGroup) %>%
+    select(AgeGroup, Passengers = n)
+
+pandoc.table(agegroupCount)
+
+ggplot(agegroupCount, aes(x = AgeGroup, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = AgeGroup), col = "black", alpha = 0.8) +
+    labs(x = "", y = "Number of Passengers", title = "Number of Child vs Adult on board") +
+    theme_classic()
+```
+
+**Comment:** The difference is pretty big! 763 total Adults are on board while there are only 128 Children on board. 
+
+Now we see the survival comparison between Child and Adult.
+```{r}
+agegroupSurvived <- titanicTrain %>%
+    group_by(AgeGroup) %>%
+    count(Survived) %>%
+    filter(Survived == 1) %>%
+    select(AgeGroup, Passengers = n)
+
+pandoc.table(agegroupSurvived)
+
+agegroupSurvived <- titanicTrain %>%
+    group_by(AgeGroup) %>%
+    count(Survived) %>%
+    select(AgeGroup, Survived, Passengers = n)
+
+ggplot(agegroupSurvived, aes(x = AgeGroup, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = AgeGroup), col = "black", alpha = 0.8) +
+    labs(x = "", y = "", title = "Survival of Child vs Adult on board (0 = Died, 1 = Survived)") +
+    facet_wrap(~Survived) +
+    theme_bw()
+```
+
+**Summary**:
+
+* About **36%** (278 out of 763) passengers that are considered as Adults Survived.
+* About **50%** (64 out of 128) passengers that are considered as Children Survived.
+
+It seems pretty expected that Child survival rate is higher than Adult as usually the safety of childrens are prioritized especially if the other family members are present.
+
+### Fares vs Survived
+```{r, warning = FALSE}
+ggplot(titanicTrain, aes(Fare)) +
+    geom_density() +
+    labs(x = "Fares", y = "Number of Passengers", title = "Number of Passengers based on Fares") +
+    theme_bw()
+
+ggplot(titanicTrain) +
+  geom_freqpoly(mapping = aes(x = Fare, color = Survived), binwidth = 0.05) +
+  scale_x_log10() +
+  labs(x = "Fares", y = "Number of Passengers", title = "Number of Survival based on Fares") +
+  theme_bw()
+```
+
+**Comment:** The plot shows that majority of the passengers bought a low fare ticket to board the ship. It also looks like the higher the fare amount, passengers tend to have higher chance to survive.
+
+We can see the relationship more clearly by looking at the **FareGroup** distribution:
+```{r}
+faregroupCount <- titanicTrain %>%
+    group_by(FareGroup) %>%
+    count(FareGroup) %>%
+    select(FareGroup, Passengers = n)
+
+pandoc.table(faregroupCount)
+
+ggplot(faregroupCount, aes(x = FareGroup, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = FareGroup), col = "black", alpha = 0.8) +
+    labs(x = "", y = "Number of Passengers", title = "Number of Passengers based on Fare levels") +
+    theme_classic()
+```
+
+**Comment:** So again, it is shown that majority of passengers have low fare tickets. This matches with the previous findings.
+
+Now see the relationship of FareGroup with Survival:
+```{r}
+faregroupSurvived <- titanicTrain %>%
+    group_by(FareGroup) %>%
+    count(Survived) %>%
+    filter(Survived == 1) %>%
+    select(FareGroup, Passengers = n)
+
+pandoc.table(faregroupSurvived)
+
+faregroupSurvived <- titanicTrain %>%
+    group_by(FareGroup) %>%
+    count(Survived) %>%
+    select(FareGroup, Survived, Passengers = n)
+
+ggplot(faregroupSurvived, aes(x = FareGroup, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = FareGroup), col = "black", alpha = 0.8) +
+    labs(x = "", y = "", title = "Number of Survivors based on Fare Levels (0 = Died, 1 = Survived)") +
+    facet_wrap(~Survived) +
+    theme_bw()
+```
+
+**Summary:**
+
+* About **38%** (328 out of 871) passengers that paid a low ticket fare Survived.
+* About **65%** (11 out of 17) passengers that paid a medium ticket fare Survived.
+* **100%** (3 out of 3) passengers that paid a high ticket fare Survived.
+
+It looks like the passengers that paid higher fare tickets have a higher chance of surviving. It does make sense since having a higher Fare ticket means they are probably the rich people such as the nobility that usually are prioritized more to be saved.
+
+### Pclass vs Survived
+```{r}
+classCount <- titanicTrain %>%
+    group_by(Pclass) %>%
+    count(Pclass) %>%
+    select(Pclass, Passengers = n)
+
+pandoc.table(classCount)
+
+ggplot(classCount, aes(x = Pclass, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = Pclass), col = "black", alpha = 0.8) +
+    labs(x = "Passenger Class", y = "Number of Passengers", title = "Number of Passengers in each passenger class") +
+    theme_classic()
+```
+
+**Comment:** It is shown that most of the passengers are in the 3rd class while the other two classes have similar counts.
+
+Let's now see the classes relationship with survival rate:
+```{r}
+classSurvived <- titanicTrain %>%
+    group_by(Pclass) %>%
+    count(Survived) %>%
+    filter(Survived == 1) %>%
+    select(Pclass, Passengers = n) 
+
+pandoc.table(classSurvived)
+
+classSurvived <- titanicTrain %>%
+    group_by(Pclass) %>%
+    count(Survived) %>%
+    select(Pclass, Survived, Passengers = n)
+
+ggplot(classSurvived, aes(x = Pclass, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = Pclass), col = "black", alpha = 0.8) +
+    labs(x = "", y = "Number of Passengers", title = "Number of Survivors based on their passenger class (0 = Died, 1 = Survived)") +
+    facet_wrap(~Survived) +
+    theme_bw()
+```
+
+**Summary:**
+
+* About **63%** (136 out of 216) passengers in 1st class survived.
+* About **47%** (87 out of 184) passengers in 2nd class survived.
+* About **24%** (119 out of 491) passengers in 3rd class survived.
+
+It is highly possible that the 1st class passengers includes a majority of nobility and other rich passengers that pays more to be in 1st class. So it does make sense that the result shows the highest survival rate from the 1st class passengers.
+
+### Sex vs Survived
+```{r}
+sexCount <- titanicTrain %>%
+    group_by(Sex) %>%
+    count(Sex) %>%
+    select(Gender = Sex, Passengers = n)
+
+pandoc.table(sexCount)
+
+ggplot(sexCount, aes(x = Gender, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = Gender), col = "black", alpha = 0.8) +
+    labs(x = "Gender", y = "Number of Passengers", title = "Number of Males vs Females on board") +
+    theme_classic()
+```
+
+**Comment:** There are more male passengers on board compared to females. Male passengers are almost twice the count of female passengers.
+
+Now let's see the relationship of Gender with survival rate:
+```{r}
+sexSurvived <- titanicTrain %>%
+    group_by(Sex) %>%
+    count(Survived) %>%
+    filter(Survived == 1) %>%
+    select(Gender = Sex, Passengers = n)
+
+pandoc.table(sexSurvived)
+
+sexSurvived <- titanicTrain %>%
+    group_by(Sex) %>%
+    count(Survived) %>%
+    select(Gender = Sex, Survived, Passengers = n)
+
+ggplot(sexSurvived, aes(x = Gender, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = Gender), col = "black", alpha = 0.8) +
+    labs(x = "", y = "Number of Passengers", title = "Males vs Females Survival Comparison (0 = Died, 1 = Survived)") +
+    facet_wrap(~Survived) +
+    theme_bw()
+```
+
+**Summary:**
+
+* About **74%** (233 out of 314) passengers that are females survived.
+* About **18%** (109 out of 577) passengers that are males survived
+
+Females seem to be highly prioritized to be saved as shown by the significant difference of survival rate compared to males. It is not a surprise since women and children are usually saved first before the men in this society.
+
+### Embarked vs Survived
+```{r}
+embarkedCount <- titanicTrain %>%
+    group_by(Embarked) %>%
+    count(Embarked) %>%
+    select(Port = Embarked, Passengers = n)
+
+pandoc.table(embarkedCount)
+
+ggplot(embarkedCount, aes(x = Port, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = Port), col = "black", alpha = 0.8) +
+    labs(x = "", y = "Number of Passengers", title = "Number of Passengers from each Port of Embarkation") +
+    theme_classic()
+```
+
+**Comment:** The analysis shows a majority of the passengers embarked from port S (Southampton).
+
+Now lets see the relationship between the Ports of Embarkation with Survival:
+```{r}
+embarkedSurvived <- titanicTrain %>%
+    group_by(Embarked) %>%
+    count(Survived) %>%
+    filter(Survived == 1) %>%
+    select(Port = Embarked, Passengers = n)
+
+pandoc.table(embarkedSurvived)
+
+embarkedSurvived <- titanicTrain %>%
+    group_by(Embarked) %>%
+    count(Survived) %>%
+    select(Port = Embarked, Survived, Passengers = n)
+
+ggplot(embarkedSurvived, aes(x = Port, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = Port), col = "black", alpha = 0.8) +
+    labs(x = "", y = "Number of Passengers", title = "Number of Survivors based on the Port of Embarkation (0 = Died, 1 = Survived)") +
+    facet_wrap(~Survived) +
+    theme_bw()
+```
+
+**Summary:**
+
+* About **55%** (93 out of 168) passengers that embarked from port C survived.
+* About **39%** (30 out of 77) passengers that embarked from port Q survived.
+* About **34%** (219 out of 646) passengers that embarked from port S survived.
+
+It seems that the highest survival rate exists in passengers who embarked from port C (Cherbourq). The other two ports (S and Q) have similar survival rate with one another.
+
+### Title vs Survived
+```{r}
+titleCount <- titanicTrain %>%
+    group_by(Title) %>%
+    count(Title) %>%
+    select(Title, Passengers = n)
+
+pandoc.table(titleCount)
+
+ggplot(titleCount, aes(x = Title, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = Title), col = "black", alpha = 0.8) +
+    labs(x = "Title", y = "Number of Passengers", title = "Number of Passengers based on the Title of their name") +
+    theme_classic()
+```
+
+**Comment:** The result shows a large number of passengers having the title "Mr" on their name. It does match with earlier analysis that there are a lot of Males that boarded the ship.
+
+Now lets see the relationship of Title with Survival
+```{r}
+titleSurvived <- titanicTrain %>%
+    group_by(Title) %>%
+    count(Survived) %>%
+    filter(Survived == 1) %>%
+    select(Title, Passengers = n)
+    
+pandoc.table(titleSurvived)
+    
+titleSurvived <- titanicTrain %>%
+    group_by(Title) %>%
+    count(Survived) %>%
+    select(Title, Survived, Passengers = n)
+
+ggplot(titleSurvived, aes(x = Title, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = Title), col = "black", alpha = 0.8) +
+    labs(x = "", y = "Number of Passengers", title = "Number of Survivors based on the Title of their name (0 = Died, 1 = Survived)") +
+    facet_wrap(~Survived) +
+    theme_bw()
+```
+
+**Summary:**
+
+* About **58%** (23 out of 40) passengers that has the title "Master" on their name Survived.
+* About **70%** (130 out of 185) passengers that has the title "Miss" on their name Survived.
+* About **16%** (81 out of 517) passengers that has the title "Mr" on their name Survived.
+* About **79%** (100 out of 126) passengers that has the title "Mrs" on their name Survived.
+* About **35%** (8 out of 23) passengers that has the other titles on their name Survived.
+
+These findings are also expected since we know from earlier analysis that Females have higher chance to survive compared to males. So it is expected that the female titles such as "Miss" and "Mrs" have a high survival rate while the male counterparts have low survival rates.
+
+### Family Size vs Survived
+```{r}
+famsizeCount <- titanicTrain %>%
+    group_by(FamilySize) %>%
+    count(FamilySize) %>%
+    select(FamilySize, Passengers = n)
+
+pandoc.table(famsizeCount)
+
+ggplot(famsizeCount, aes(x = FamilySize, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = FamilySize), col = "black", alpha = 0.8) +
+    labs(x = "Family Size", y = "Number of Passengers", title = "Number of Passengers based on their Family Size") +
+    theme_classic()
+```
+
+**Comment:** There are a lot of passengers with no family members that boarded the ship (537 total). The count trend seem to be decreasing the more family size a passenger have other than family size of 6 where it increases a little.
+
+We now look at the relationship between FamilySize with Survival
+```{r}
+famsizeSurvived <- titanicTrain %>%
+    group_by(FamilySize) %>%
+    count(Survived) %>%
+    filter(Survived == 1) %>%
+    select(FamilySize, Passengers = n)
+
+pandoc.table(famsizeSurvived)
+
+famsizeSurvived <- titanicTrain %>%
+    group_by(FamilySize) %>%
+    count(Survived) %>%
+    select(FamilySize, Survived, Passengers = n)
+
+ggplot(famsizeSurvived, aes(x = FamilySize, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = FamilySize), col = "black", alpha = 0.8) +
+    labs(x = "", y = "Number of Passengers", title = "Number of Survivors based on their Family Size (0 = Died, 1 = Survived)") +
+    facet_wrap(~Survived) +
+    theme_bw()
+```
+
+**Comment:** The result seems to show a decreasing survival rate the more family members are on board with the passengers. None of the passengers with family size of more than 7 survived.
+
+We can look at the Familygroup variable that we created before to understand the relationship more:
+```{r}
+famgroupCount <- titanicTrain %>%
+    group_by(FamilyGroup) %>%
+    count(FamilyGroup) %>%
+    select(FamilyGroup, Passengers = n)
+
+pandoc.table(famgroupCount)
+
+ggplot(famgroupCount, aes(x = FamilyGroup, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = FamilyGroup), col = "black", alpha = 0.8) +
+    labs(x = "", y = "Number of Passengers", title = "Number of Passengers based on their Family Group") +
+    theme_classic()
+```
+
+**Comment:** Just like before, the result shows that most passengers boarded the ship without any family members.
+
+Lets see the relationship with Survival
+```{r}
+famgroupSurvived <- titanicTrain %>%
+    group_by(FamilyGroup) %>%
+    count(Survived) %>%
+    filter(Survived == 1) %>%
+    select(FamilyGroup, Passengers = n)
+
+pandoc.table(famgroupSurvived)
+
+famgroupSurvived <- titanicTrain %>%
+    group_by(FamilyGroup) %>%
+    count(Survived) %>%
+    select(FamilyGroup, Survived, Passengers = n)
+
+ggplot(famgroupSurvived, aes(x = FamilyGroup, y = Passengers)) +
+    geom_bar(stat = "identity", aes(fill = FamilyGroup), col = "black", alpha = 0.8) +
+    labs(x = "", y = "Number of Passengers", title = "Number of Survivors based on their Family Group (0 = Died, 1 = Survived)") +
+    facet_wrap(~Survived) +
+    theme_bw()
+```
+
+**Summary:**
+
+* About **30%** (163 out of 537) passengers that boarded alone Survived.
+* About **58%** (169 out of 292) passengers that boarded  with a small family group (2 - 4 members) Survived.
+* About **16%** (10 out of 62) passengers that boarded with a large family group (more than 4 members) Survived.
+
+The result shows that small family group of size 2 - 4 has the highest chance of surviving. The chance of survival is really low for the passengers that has a large family size members of more than 4. Passengers that boarded alone also do not have a high survival rate.
+
+### **Prediction**
+
+We finished exploring the data! Now we should have a good understanding of how the data looks like and can move on to building the prediction model.
+
+As usual, we first load the necessary packages:
+```{r, message = FALSE}
+library(caret)
+library(randomForest)
+```
+
+**Note**: As mentioned in the introduction, we only use Random Forest model for the prediction.
+
+We then further split the data to 70% training sets and 30% test sets as follows:
+```{r}
+set.seed(1995)
+inTrain <- createDataPartition(titanicTrain$Survived, p = 0.7, list = FALSE)
+training <- titanicTrain[inTrain, ]
+testing <- titanicTrain[-inTrain, ]
+```
+
+Here we build the model and see the accuracy of the model:
+```{r}
+set.seed(1995)
+rfModel <- randomForest(Survived ~ Pclass + Sex + AgeGroup + Fare + Embarked + Title + FamilyGroup, data = training)
+rfPred <- predict(rfModel, newdata = testing)
+rfCM <- confusionMatrix(rfPred, testing$Survived)
+rfCM$table
+
+accuracy <- rfCM$overall[1]
+accuracy
+```
+The random forest model yields a solid 80.8% accuracy. Not bad for our first try!
+
+It is done! We can now use this model to make the prediction on the original test data and store the result to a csv file for the submission to Kaggle:
+```{r}
+prediction <- predict(rfModel, newdata = titanicTest)
+
+titanicPrediction <- data.frame(PassengerId = titanicTest$PassengerId, Survived = prediction)
+write.csv(titanicPrediction, file = "TitanicPrediction.csv", row.names = FALSE)
+```
